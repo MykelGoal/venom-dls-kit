@@ -18,7 +18,10 @@ from kitgen import generate_kit
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 KITS_DIR = os.path.join(BASE, 'kits')
-os.makedirs(KITS_DIR, exist_ok=True)
+try:
+    os.makedirs(KITS_DIR, exist_ok=True)
+except Exception:
+    pass
 
 app = Flask(__name__, static_folder=BASE, static_url_path='')
 WA_NUMBER = os.environ.get('WA_NUMBER', '2348021016309')
@@ -166,8 +169,12 @@ def generate():
     style = d.get('style', 'home')
     club = (d.get('club') or 'kit').replace(' ', '_').replace('/', '_')
     kid = f"{club}_{style}_{uuid.uuid4().hex[:10]}"
-    tmp = os.path.join(KITS_DIR, kid + '.png')
-    generate_kit(tmp, primary, secondary, socks, style)
+    tmp = os.path.join('/tmp', kid + '.png')   # Vercel FS is read-only except /tmp
+    try:
+        generate_kit(tmp, primary, secondary, socks, style)
+    except Exception as e:
+        print('kitgen failed:', e)
+        return jsonify({'ok': False, 'error': 'generation failed'}), 500
     with open(tmp, 'rb') as f:
         data = f.read()
     if ensure_db() and DATABASE_URL:
@@ -179,14 +186,16 @@ def generate():
                 'socks_color,png) VALUES (%s,%s,%s,%s,%s,%s,%s)',
                 (kid, club, style, primary, secondary, socks, psycopg2.Binary(data)))
             c.commit(); c.close()
-            try:
-                os.remove(tmp)
-            except Exception:
-                pass
             return jsonify({'ok': True, 'url': f'/kits/{kid}.png'})
         except Exception as e:
             print('kit insert failed:', e)
             return jsonify({'ok': False, 'error': 'db error'}), 500
+    # local fallback: keep file in KITS_DIR so /kits can serve it
+    import shutil
+    try:
+        shutil.copy(tmp, os.path.join(KITS_DIR, kid + '.png'))
+    except Exception:
+        pass
     return jsonify({'ok': True, 'url': f'/kits/{kid}.png'})
 
 

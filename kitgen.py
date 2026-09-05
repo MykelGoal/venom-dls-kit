@@ -1,9 +1,10 @@
 """Reusable DLS 26 kit generator.
 Builds a 512x512 import-ready PNG from a DLS UV template using any colors.
 """
+import os
 from PIL import Image, ImageDraw
 
-TEMPLATE = 'dls_template.png'
+TEMPLATE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'dls_template.png')
 
 
 def hex2rgb(h):
