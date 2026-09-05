@@ -1,17 +1,21 @@
-"""VENOM DLS — Flask backend (Vercel + Supabase ready).
+"""VENOM DLS — Flask backend (Vercel + Supabase Postgres ready).
 
-Modes:
-  - With SUPABASE_URL + key set  -> orders go to Supabase Postgres,
-    generated kits uploaded to a PUBLIC Supabase Storage bucket (import-ready URLs).
-  - Without Supabase env vars     -> local SQLite + local /kits files (dev fallback).
+Data layer:
+  - With DATABASE_URL set  -> all data lives in your Supabase Postgres
+                             (orders table + kits table with BYTEA png).
+                             Generated kits are served from the DB, so the
+                             /kits/<id>.png URL is a real, public, import-ready
+                             image on Vercel (no extra Storage keys needed).
+  - Without DATABASE_URL   -> local SQLite + local /kits files (dev fallback).
 
 Deploy: Vercel Python builder (@vercel/python) -> app.py, see vercel.json.
 """
 import os
-import io
 import uuid
-import sqlite3
 from flask import Flask, request, send_from_directory, jsonify, Response
+from PIL import Image
+import psycopg2
+import psycopg2.extras
 
 from kitgen import generate_kit
 
@@ -21,44 +25,51 @@ os.makedirs(KITS_DIR, exist_ok=True)
 
 app = Flask(__name__, static_folder=BASE, static_url_path='')
 WA_NUMBER = os.environ.get('WA_NUMBER', '2348021016309')
+DATABASE_URL = os.environ.get('DATABASE_URL')
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+    DATABASE_URL = os.environ.get('DATABASE_URL') or DATABASE_URL
+except Exception:
+    pass
 
 
-# ---------------- Supabase (optional) ----------------
-def get_sb():
-    url = os.environ.get('SUPABASE_URL')
-    key = os.environ.get('SUPABASE_SERVICE_ROLE_KEY') or os.environ.get('SUPABASE_ANON_KEY')
-    if not (url and key):
-        return None
-    try:
-        from supabase import create_client
-        return create_client(url, key)
-    except Exception:
-        return None
+def _url():
+    u = DATABASE_URL
+    if u and 'sslmode' not in u:
+        u += ('&' if '?' in u else '?') + 'sslmode=require'
+    return u
 
 
-sb = get_sb()
-
-
-def db():
-    conn = sqlite3.connect(os.path.join(BASE, 'orders.db'))
-    conn.row_factory = sqlite3.Row
-    return conn
+def conn():
+    return psycopg2.connect(_url(), connect_timeout=10)
 
 
 def init_db():
-    c = db()
-    c.execute('''CREATE TABLE IF NOT EXISTS orders (
-        id TEXT PRIMARY KEY, name TEXT, contact TEXT, club TEXT,
-        style TEXT, details TEXT, kit_url TEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
-    c.commit()
-    c.close()
+    if not DATABASE_URL:
+        import sqlite3
+        c = sqlite3.connect(os.path.join(BASE, 'orders.db'))
+        c.row_factory = sqlite3.Row
+        c.execute('''CREATE TABLE IF NOT EXISTS orders (
+            id TEXT PRIMARY KEY, name TEXT, contact TEXT, club TEXT,
+            style TEXT, details TEXT, kit_url TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
+        c.commit(); c.close()
+        return
+    c = conn(); cur = c.cursor()
+    cur.execute('''CREATE TABLE IF NOT EXISTS orders (
+        id TEXT PRIMARY KEY, name TEXT, contact TEXT, club TEXT, style TEXT,
+        details TEXT, kit_url TEXT, created_at TIMESTAMPTZ DEFAULT now())''')
+    cur.execute('''CREATE TABLE IF NOT EXISTS kits (
+        id TEXT PRIMARY KEY, club TEXT, style TEXT,
+        primary_color TEXT, secondary_color TEXT, socks_color TEXT,
+        png BYTEA, created_at TIMESTAMPTZ DEFAULT now())''')
+    c.commit(); c.close()
 
 
 init_db()
 
 
-# ---------------- Routes ----------------
 @app.route('/')
 def index():
     return send_from_directory(BASE, 'index.html')
@@ -66,6 +77,14 @@ def index():
 
 @app.route('/kits/<path:filename>')
 def kits(filename):
+    if DATABASE_URL:
+        kid = filename.rsplit('.', 1)[0]
+        c = conn(); cur = c.cursor()
+        cur.execute('SELECT png FROM kits WHERE id=%s', (kid,))
+        row = cur.fetchone(); c.close()
+        if row and row[0]:
+            return Response(bytes(row[0]), mimetype='image/png')
+        return ('not found', 404)
     return send_from_directory(KITS_DIR, filename)
 
 
@@ -79,21 +98,21 @@ def orders():
     d = _payload()
     oid = uuid.uuid4().hex[:10]
     kit_url = d.get('kit_url')
-    if sb is not None:
-        sb.table('orders').insert({
-            'id': oid, 'name': d.get('name'), 'contact': d.get('contact'),
-            'club': d.get('club'), 'style': d.get('style'),
-            'details': d.get('details'), 'kit_url': kit_url,
-        }).execute()
-    else:
-        conn = db()
-        conn.execute(
+    if DATABASE_URL:
+        c = conn(); cur = c.cursor()
+        cur.execute(
             'INSERT INTO orders (id,name,contact,club,style,details,kit_url) '
-            'VALUES (?,?,?,?,?,?,?)',
+            'VALUES (%s,%s,%s,%s,%s,%s,%s)',
             (oid, d.get('name'), d.get('contact'), d.get('club'),
              d.get('style'), d.get('details'), kit_url))
-        conn.commit()
-        conn.close()
+        c.commit(); c.close()
+    else:
+        import sqlite3
+        c = sqlite3.connect(os.path.join(BASE, 'orders.db'))
+        c.execute('INSERT INTO orders VALUES (?,?,?,?,?,?,?,?)',
+                  (oid, d.get('name'), d.get('contact'), d.get('club'),
+                   d.get('style'), d.get('details'), kit_url, None))
+        c.commit(); c.close()
     wa = (f"https://wa.me/{WA_NUMBER}?text=New%20order%20from%20"
           f"{d.get('name','')}%20-%20club%20{d.get('club','')}")
     return jsonify({'ok': True, 'order_id': oid, 'notify': wa})
@@ -107,38 +126,39 @@ def generate():
     socks = d.get('socks') or secondary
     style = d.get('style', 'home')
     club = (d.get('club') or 'kit').replace(' ', '_').replace('/', '_')
-    fname = f"{club}_{style}_{uuid.uuid4().hex[:6]}.png"
-
-    tmp = os.path.join(KITS_DIR, fname)
+    kid = f"{club}_{style}_{uuid.uuid4().hex[:6]}"
+    tmp = os.path.join(KITS_DIR, kid + '.png')
     generate_kit(tmp, primary, secondary, socks, style)
     with open(tmp, 'rb') as f:
         data = f.read()
-
-    if sb is not None:
-        bucket = os.environ.get('KITS_BUCKET', 'kits')
-        sb.storage.from_(bucket).upload(
-            fname, data, {'content-type': 'image/png', 'upsert': True})
-        url = sb.storage.from_(bucket).get_public_url(fname)
+    if DATABASE_URL:
+        c = conn(); cur = c.cursor()
+        cur.execute(
+            'INSERT INTO kits (id,club,style,primary_color,secondary_color,'
+            'socks_color,png) VALUES (%s,%s,%s,%s,%s,%s,%s)',
+            (kid, club, style, primary, secondary, socks, psycopg2.Binary(data)))
+        c.commit(); c.close()
         try:
             os.remove(tmp)
         except Exception:
             pass
-    else:
-        url = f"/kits/{fname}"
-
-    return jsonify({'ok': True, 'url': url})
+    return jsonify({'ok': True, 'url': f'/kits/{kid}.png'})
 
 
 @app.route('/admin/orders')
 def admin():
-    if sb is not None:
-        rows = sb.table('orders').select('*').order('created_at', desc=True).limit(200).execute().data
+    if DATABASE_URL:
+        c = conn(); cur = c.cursor()
+        cur.execute('SELECT * FROM orders ORDER BY created_at DESC LIMIT 200')
+        cols = [d[0] for d in cur.description]
+        rows = [dict(zip(cols, r)) for r in cur.fetchall()]; c.close()
     else:
-        conn = db()
-        rows = [dict(r) for r in conn.execute(
+        import sqlite3
+        c = sqlite3.connect(os.path.join(BASE, 'orders.db'))
+        c.row_factory = sqlite3.Row
+        rows = [dict(r) for r in c.execute(
             'SELECT * FROM orders ORDER BY created_at DESC').fetchall()]
-        conn.close()
-
+        c.close()
     html = ['<html><head><meta charset="utf-8"><title>VENOM DLS Orders</title>'
             '<style>body{font-family:sans-serif;background:#0b0d12;color:#eee;padding:24px}'
             'h2{color:#39ff14}table{width:100%;border-collapse:collapse}'
