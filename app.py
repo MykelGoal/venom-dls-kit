@@ -25,11 +25,11 @@ except Exception:
 
 app = Flask(__name__, static_folder=BASE, static_url_path='')
 WA_NUMBER = os.environ.get('WA_NUMBER', '2348021016309')
-DATABASE_URL = os.environ.get('DATABASE_URL')
+DATABASE_URL = (os.environ.get('DATABASE_URL') or '').strip()
 try:
     from dotenv import load_dotenv
     load_dotenv()
-    DATABASE_URL = os.environ.get('DATABASE_URL') or DATABASE_URL
+    DATABASE_URL = (os.environ.get('DATABASE_URL') or DATABASE_URL or '').strip()
 except Exception:
     pass
 
@@ -45,7 +45,7 @@ KITS_SQL = '''CREATE TABLE IF NOT EXISTS kits (
 
 
 def _url():
-    u = DATABASE_URL
+    u = (DATABASE_URL or '').strip()
     if u and 'sslmode' not in u:
         u += ('&' if '?' in u else '?') + 'sslmode=require'
     return u
