@@ -234,6 +234,37 @@
   </div>
 </section>
 
+<section id="created">
+  <div class="sec-head">
+    <h2>Created Kits</h2>
+    <p>Fresh drops — every kit carries its own import link. More added weekly.</p>
+  </div>
+  <div class="grid">
+    <div class="card" style="border-color:var(--accent)">
+      <img src="arsenal_home_mockup.png" alt="Arsenal Home 25-26" />
+      <div class="body">
+        <h3>Arsenal Home 25-26</h3>
+        <p>Fan-made tribute · red / white</p>
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <input class="copy-input" readonly value="https://venom-dls-kit.vercel.app/kits/Arsenal_home_1aa33d9742.png" style="flex:1;background:var(--panel2);border:1px solid var(--border);color:var(--text);padding:8px;border-radius:8px;font-size:12px" />
+          <button class="copy-btn" type="button" style="background:var(--accent);color:#04130a;font-weight:700;border:none;padding:0 12px;border-radius:8px;cursor:pointer">Copy</button>
+        </div>
+      </div>
+    </div>
+    <div class="card" style="border-color:var(--accent)">
+      <img src="arsenal_away_mockup.png" alt="Arsenal Away 25-26" />
+      <div class="body">
+        <h3>Arsenal Away 25-26</h3>
+        <p>Fan-made tribute · navy / lightning blue</p>
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <input class="copy-input" readonly value="https://venom-dls-kit.vercel.app/kits/Arsenal_away_dd4bec22ba.png" style="flex:1;background:var(--panel2);border:1px solid var(--border);color:var(--text);padding:8px;border-radius:8px;font-size:12px" />
+          <button class="copy-btn" type="button" style="background:var(--accent);color:#04130a;font-weight:700;border:none;padding:0 12px;border-radius:8px;cursor:pointer">Copy</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
 <footer>
   © 2026 VENOM DLS — Custom DLS 26 Kits. Designed for the Dream League Soccer community.
 </footer>
@@ -292,6 +323,18 @@
       b.textContent = 'Copied!';
       setTimeout(() => (b.textContent = 'Copy'), 1500);
     } catch (e) {}
+  });
+
+  document.querySelectorAll('.copy-btn').forEach(function (b) {
+    b.addEventListener('click', async () => {
+      const inp = b.parentElement.querySelector('input');
+      if (!inp) return;
+      try {
+        await navigator.clipboard.writeText(inp.value);
+        b.textContent = 'Copied!';
+        setTimeout(() => (b.textContent = 'Copy'), 1500);
+      } catch (e) {}
+    });
   });
 </script>
 
