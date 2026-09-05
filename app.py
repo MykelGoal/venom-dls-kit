@@ -143,6 +143,8 @@ def orders():
         except Exception as e:
             print('order insert failed:', e)
             return jsonify({'ok': False, 'error': 'db error'}), 500
+    elif DATABASE_URL:
+        return jsonify({'ok': False, 'error': 'database unavailable'}), 500
     else:
         import sqlite3
         db_path = '/tmp/venom_orders.db' if os.environ.get('VERCEL') else os.path.join(BASE, 'orders.db')
@@ -190,13 +192,33 @@ def generate():
         except Exception as e:
             print('kit insert failed:', e)
             return jsonify({'ok': False, 'error': 'db error'}), 500
-    # local fallback: keep file in KITS_DIR so /kits can serve it
+    # DATABASE_URL configured but DB unreachable -> surface the error
+    if DATABASE_URL:
+        return jsonify({'ok': False, 'error': 'database unavailable'}), 500
+    # dev fallback: keep file in KITS_DIR so /kits can serve it
     import shutil
     try:
         shutil.copy(tmp, os.path.join(KITS_DIR, kid + '.png'))
     except Exception:
         pass
     return jsonify({'ok': True, 'url': f'/kits/{kid}.png'})
+
+
+@app.route('/api/debug')
+def debug():
+    info = {
+        'has_db_url': bool(DATABASE_URL),
+        'db_url_host': DATABASE_URL.split('@')[-1] if DATABASE_URL else None,
+        'db_ready': DB_READY,
+        'vercel': bool(os.environ.get('VERCEL')),
+    }
+    if DATABASE_URL:
+        try:
+            c = conn(); cur = c.cursor(); cur.execute('select 1'); cur.fetchone(); c.close()
+            info['db_connect'] = 'ok'
+        except Exception as e:
+            info['db_connect'] = f'FAIL: {type(e).__name__}: {e}'
+    return jsonify(info)
 
 
 @app.route('/admin/orders')
