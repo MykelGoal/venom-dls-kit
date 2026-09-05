@@ -42,6 +42,7 @@ def _url():
 
 
 def conn():
+    import psycopg2
     return psycopg2.connect(_url(), connect_timeout=10)
 
 
